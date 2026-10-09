@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+
+{% block title %}Add Task · Zivoc Admin{% endblock %}
+
+{% block body %}
+<div class="shell">
+    {% set active = "tasks" %}
+    {% include "_sidebar.html" %}
+        <main class="content">
+            <h1>Add Task</h1>
+            <p class="lead">Select a person to assign a task to.</p>
+
+            {% if sent %}
+            <div class="notice ok">Task assigned to {{ sent }}.</div>
+            {% endif %}
+            {% if error %}
+            <div class="notice err">{{ error }}</div>
+            {% endif %}
+
+            {% for role, members in people.items() %}
+            <section class="people-section">
+                <h2>{{ role }}s <span class="count">{{ members | length }}</span></h2>
+                {% if members %}
+                <div class="people-grid">
+                    {% for p in members %}
+                    <a class="person" href="{{ url_for('assign_task', user=p.name, role=role) }}">
+                        <div class="avatar">
+                            {% if p.user_image %}
+                            <img src="{{ p.user_image }}" alt="">
+                            {% else %}
+                            {{ (p.full_name or p.name)[:1] | upper }}
+                            {% endif %}
+                        </div>
+                        <div class="who">
+                            <strong>{{ p.full_name or p.name }}</strong>
+                            <small>{{ p.name }}</small>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="lead">No one has the {{ role }} role.</p>
+                {% endif %}
+            </section>
+            {% endfor %}
+        </main>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% block body %}
+{% if user %}
+<div class="shell">
+    {% set active = "home" %}
+    {% include "_sidebar.html" %}
+        <main class="content">
+            <h1>Welcome, {{ user.name.split(' ')[0] }}</h1>
+            <p class="lead">You are signed in with your Zivoc account. Use the sidebar to open Zivoc ERP.</p>
+        </main>
+    </div>
+</div>
+{% else %}
+<div class="landing">
+    <div class="card">
+        <img class="logo" src="{{ url_for('static', filename='img/logo.svg') }}" alt="Zivoc" width="56" height="56">
+        <h1>Zivoc Admin</h1>
+        <p class="lead">Sign in with your Zivoc account to continue.</p>
+        <a class="btn-zivoc" id="signin" href="{{ url_for('login') }}">
+            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="20" height="20">
+            <span>Sign in with Zivoc</span>
+        </a>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

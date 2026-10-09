@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+
+{% block title %}Sign-in error · Zivoc Admin{% endblock %}
+
+{% block body %}
+<div class="landing">
+    <div class="card">
+        <img class="logo" src="{{ url_for('static', filename='img/logo.svg') }}" alt="Zivoc" width="56" height="56">
+        <h1>Sign-in failed</h1>
+        <p class="lead">{{ message }}</p>
+        <a class="btn-zivoc" href="{{ url_for('login') }}">
+            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="" width="20" height="20">
+            <span>Try again with Zivoc</span>
+        </a>
+    </div>
+</div>
+{% endblock %}
