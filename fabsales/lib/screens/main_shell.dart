@@ -3,9 +3,10 @@ import 'package:provider/provider.dart';
 
 import '../services/auth_service.dart';
 import '../services/data_store.dart';
-import 'coming_soon_screen.dart';
+import 'orders_screen.dart';
 import 'home_screen.dart';
 import 'leads_screen.dart';
+import 'products_screen.dart';
 import 'profile_screen.dart';
 
 class MainShell extends StatelessWidget {
@@ -42,14 +43,14 @@ class _ShellViewState extends State<_ShellView> {
         if (!didPop) _select(0);
       },
       child: Scaffold(
-        appBar: _index == 0 ? null : AppBar(title: Text(_titles[_index])),
+        appBar: _index == 0 || _index == 3 ? null : AppBar(title: Text(_titles[_index])),
         body: IndexedStack(
           index: _index,
           children: [
             HomeScreen(onOpenLeads: () => _select(1)),
             const LeadsScreen(),
-            const ComingSoonScreen(icon: Icons.receipt_long_outlined, label: 'Orders'),
-            const ComingSoonScreen(icon: Icons.inventory_2_outlined, label: 'Products'),
+            const OrdersScreen(),
+            const ProductsScreen(),
             const ProfileScreen(),
           ],
         ),

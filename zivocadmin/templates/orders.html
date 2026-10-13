@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+
+{% block title %}Orders · Zivoc Admin{% endblock %}
+
+{% block body %}
+<div class="shell">
+    {% set active = "orders" %}
+    {% include "_sidebar.html" %}
+        <main class="content">
+            <h1>Orders</h1>
+            <p class="lead">Orders received from the Fabsales app.</p>
+
+            {% if done %}
+            <div class="notice ok">Order {{ done }}.</div>
+            {% endif %}
+            {% if error %}
+            <div class="notice err">{{ error }}</div>
+            {% endif %}
+
+            {% if not orders and not error %}
+            <p class="lead order-empty">No orders yet.</p>
+            {% endif %}
+
+            <div class="order-list">
+                {% for o in orders %}
+                <article class="order-card">
+                    <header class="order-head">
+                        <div>
+                            <h2>{{ o.customer_name or o.lead.lead_name or o.party_name }}</h2>
+                            <small>{{ o.name }} · {{ o.transaction_date }} · placed by {{ o.placed_by }}</small>
+                        </div>
+                        <span class="status status-{{ o.status | lower }}">{{ o.status }}</span>
+                    </header>
+
+                    <div class="order-grid">
+                        <section>
+                            <h3>Lead</h3>
+                            <dl class="kv">
+                                <dt>Lead ID</dt><dd>{{ o.party_name }}</dd>
+                                <dt>Name</dt><dd>{{ [o.lead.first_name, o.lead.middle_name, o.lead.last_name] | select | join(' ') or o.lead.lead_name or '-' }}</dd>
+                                <dt>Organization</dt><dd>{{ o.lead.company_name or '-' }}</dd>
+                                <dt>Job title</dt><dd>{{ o.lead.job_title or '-' }}</dd>
+                                <dt>Mobile</dt><dd>{{ o.lead.mobile_no or o.lead.phone or '-' }}</dd>
+                                <dt>Email</dt><dd>{{ o.lead.email_id or '-' }}</dd>
+                                <dt>Lead status</dt><dd>{{ o.lead.status or '-' }}</dd>
+                            </dl>
+                        </section>
+                        <section>
+                            <h3>Order details</h3>
+                            <dl class="kv">
+                                <dt>Order no.</dt><dd>{{ o.name }}</dd>
+                                <dt>Date</dt><dd>{{ o.transaction_date }}</dd>
+                                <dt>Total qty</dt><dd>{{ o.total_qty | int }}</dd>
+                                <dt>Total</dt><dd>{{ o.currency }} {{ '%.2f' | format(o.grand_total or 0) }}</dd>
+                                <dt>Status</dt><dd>{{ o.status }}</dd>
+                            </dl>
+                        </section>
+                    </div>
+
+                    <div class="table-wrap">
+                        <table class="order-items">
+                            <thead>
+                                <tr><th>Item</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for i in o['items'] %}
+                                <tr>
+                                    <td>{{ i.item_name or i.item_code }}<small>{{ i.item_code }}</small></td>
+                                    <td class="num">{{ i.qty | int }} {{ i.uom }}</td>
+                                    <td class="num">{{ '%.2f' | format(i.rate or 0) }}</td>
+                                    <td class="num">{{ '%.2f' | format(i.amount or 0) }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    {% if o.status == 'Pending' %}
+                    <footer class="order-actions">
+                        <form method="post" action="{{ url_for('order_status') }}">
+                            <input type="hidden" name="order" value="{{ o.name }}">
+                            <input type="hidden" name="status" value="Approved">
+                            <button class="btn-approve" type="submit">Approve</button>
+                        </form>
+                        <form method="post" action="{{ url_for('order_status') }}">
+                            <input type="hidden" name="order" value="{{ o.name }}">
+                            <input type="hidden" name="status" value="Disapproved">
+                            <button class="btn-disapprove" type="submit">Disapprove</button>
+                        </form>
+                    </footer>
+                    {% endif %}
+                </article>
+                {% endfor %}
+            </div>
+        </main>
+    </div>
+</div>
+{% endblock %}

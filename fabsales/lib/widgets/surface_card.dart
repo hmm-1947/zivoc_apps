@@ -6,12 +6,14 @@ class SurfaceCard extends StatelessWidget {
     required this.child,
     this.padding = const EdgeInsets.all(16),
     this.onTap,
+    this.onLongPress,
     this.radius = 20,
   });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
   final VoidCallback? onTap;
+  final VoidCallback? onLongPress;
   final double radius;
 
   @override
@@ -36,6 +38,7 @@ class SurfaceCard extends StatelessWidget {
         child: InkWell(
           borderRadius: shape,
           onTap: onTap,
+          onLongPress: onLongPress,
           child: Padding(padding: padding, child: child),
         ),
       ),

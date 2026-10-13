@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/lead.dart';
+import '../models/sales_summary.dart';
 import '../models/task.dart';
 import '../services/auth_service.dart';
 import '../services/data_store.dart';
@@ -12,16 +13,19 @@ import '../widgets/lead_tile.dart';
 import '../widgets/section_header.dart';
 import '../widgets/surface_card.dart';
 import '../widgets/task_tile.dart';
+import 'attendance_screen.dart';
 import 'task_detail_screen.dart';
 import 'tasks_screen.dart';
 
-const _salesTarget = 0.0;
-const _salesAchieved = 0.0;
 
 void _comingSoon(BuildContext context) {
   ScaffoldMessenger.of(context)
     ..hideCurrentSnackBar()
     ..showSnackBar(const SnackBar(content: Text('Coming soon')));
+}
+
+void _openAttendance(BuildContext context) {
+  Navigator.of(context).push(MaterialPageRoute(builder: (_) => const AttendanceScreen()));
 }
 
 void _openTasks(BuildContext context) {
@@ -227,22 +231,10 @@ class _Greeting extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 8),
-        SurfaceCard(
-          radius: 14,
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(Icons.calendar_today_outlined, size: 16, color: theme.colorScheme.primary),
-              const SizedBox(width: 8),
-              Text(
-                formatLongDate(DateTime.now()),
-                style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(width: 4),
-              const Icon(Icons.keyboard_arrow_down_rounded, size: 18),
-            ],
-          ),
+        FilledButton.icon(
+          onPressed: () => _openAttendance(context),
+          icon: const Icon(Icons.fingerprint_rounded, size: 18),
+          label: const Text('Attendance'),
         ),
       ],
     );
@@ -258,8 +250,7 @@ class _SummaryCard extends StatelessWidget {
     final scheme = theme.colorScheme;
     final green = context.appColors.green;
     final muted = theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
-    final ratio = _salesTarget == 0 ? 0.0 : (_salesAchieved / _salesTarget).clamp(0.0, 1.0);
-    final percent = (ratio * 100).round();
+    final summary = context.select<DataStore, SalesSummary?>((store) => store.summary);
 
     return SurfaceCard(
       padding: const EdgeInsets.all(16),
@@ -272,34 +263,17 @@ class _SummaryCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      "Today's Sales Target",
+                      'Monthly Sales Target',
                       style: theme.textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
                     ),
                     const SizedBox(height: 6),
                     Text(
-                      formatRupees(_salesTarget),
+                      summary == null ? '–' : formatRupees(summary.target),
                       style: theme.textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w800),
                     ),
                   ],
                 ),
               ),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Text(
-                    formatRupees(_salesAchieved),
-                    style: theme.textTheme.titleMedium?.copyWith(
-                      color: green,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  Text(
-                    'Achieved ($percent%)',
-                    style: theme.textTheme.labelMedium?.copyWith(color: green),
-                  ),
-                ],
-              ),
-              const SizedBox(width: 12),
               SizedBox(
                 width: 52,
                 height: 52,
@@ -311,19 +285,20 @@ class _SummaryCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 14),
-          TweenAnimationBuilder<double>(
-            tween: Tween<double>(begin: 0, end: ratio),
-            duration: const Duration(milliseconds: 700),
-            curve: Curves.easeOutCubic,
-            builder: (context, value, _) => ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: LinearProgressIndicator(
-                value: value,
-                minHeight: 10,
-                color: green,
-                backgroundColor: green.withValues(alpha: 0.15),
-              ),
-            ),
+          _SummaryRow(
+            icon: Icons.trending_up_rounded,
+            label: 'Approved sales this month',
+            value: summary == null ? '–' : formatRupees(summary.achieved),
+            muted: muted,
+            green: green,
+          ),
+          const SizedBox(height: 10),
+          _SummaryRow(
+            icon: Icons.payments_outlined,
+            label: 'Commission earned this month',
+            value: summary == null ? '–' : formatRupees(summary.earned),
+            muted: muted,
+            green: green,
           ),
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -354,6 +329,40 @@ class _SummaryCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SummaryRow extends StatelessWidget {
+  const _SummaryRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.muted,
+    required this.green,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final TextStyle? muted;
+  final Color green;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: green),
+        const SizedBox(width: 8),
+        Expanded(child: Text(label, style: muted)),
+        Text(
+          value,
+          style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: green,
+                fontWeight: FontWeight.w800,
+              ),
+        ),
+      ],
     );
   }
 }

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block title %}Target · Zivoc Admin{% endblock %}
+
+{% block body %}
+<div class="shell">
+    {% set active = "commission" %}
+    {% include "_sidebar.html" %}
+        <main class="content">
+            <h1>Target</h1>
+            <p class="lead">Set monthly sales targets and the commission salesmen earn on approved orders.</p>
+
+            {% if done %}
+            <div class="notice ok">{{ done }}</div>
+            {% endif %}
+            {% if error %}
+            <div class="notice err">{{ error }}</div>
+            {% endif %}
+
+            <div class="all-forms">
+                <form class="task-form commission-all" method="post" action="{{ url_for('target_set') }}">
+                    <h2>Monthly target · all salesmen</h2>
+                    <label for="all-amount">Monthly sales target (₹)</label>
+                    <div class="percent-row">
+                        <input id="all-amount" name="amount" type="number" min="0" step="0.01" required>
+                        <input type="hidden" name="apply_to_all" value="1">
+                        <button class="btn-primary" type="submit">Apply to all</button>
+                    </div>
+                </form>
+
+                <form class="task-form commission-all" method="post" action="{{ url_for('commission_set') }}">
+                    <h2>Commission · all salesmen</h2>
+                    <label for="all-percent">Commission percentage</label>
+                    <div class="percent-row">
+                        <input id="all-percent" name="percent" type="number" min="0" max="100" step="0.01" required>
+                        <input type="hidden" name="apply_to_all" value="1">
+                        <button class="btn-primary" type="submit">Apply to all</button>
+                    </div>
+                </form>
+            </div>
+
+            <section class="people-section">
+                <h2>Salesmen <span class="count">{{ salesmen | length }}</span></h2>
+                {% if salesmen %}
+                <div class="commission-list">
+                    {% for s in salesmen %}
+                    <div class="commission-row salesman-card">
+                        <div class="avatar">
+                            {% if s.user_image %}
+                            <img src="{{ s.user_image }}" alt="">
+                            {% else %}
+                            {{ (s.full_name or s.name)[:1] | upper }}
+                            {% endif %}
+                        </div>
+                        <div class="who">
+                            <strong>{{ s.full_name or s.name }}</strong>
+                            <small>{{ s.name }}</small>
+                        </div>
+                        <form class="inline-form" method="post" action="{{ url_for('target_set') }}">
+                            <span class="current">Target: ₹{{ '{:,.2f}'.format(s.monthly_target) }}</span>
+                            <input type="hidden" name="user" value="{{ s.name }}">
+                            <input name="amount" type="number" min="0" step="0.01" value="{{ '%.2f' | format(s.monthly_target) }}" required aria-label="Monthly sales target">
+                            <button class="btn-primary" type="submit">Save</button>
+                        </form>
+                        <form class="inline-form" method="post" action="{{ url_for('commission_set') }}">
+                            <span class="current">Commission: {{ '%g' | format(s.commission_percent) }}%</span>
+                            <input type="hidden" name="user" value="{{ s.name }}">
+                            <input name="percent" type="number" min="0" max="100" step="0.01" value="{{ '%g' | format(s.commission_percent) }}" required aria-label="Commission percentage">
+                            <button class="btn-primary" type="submit">Save</button>
+                        </form>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <p class="lead">No one has the salesman role.</p>
+                {% endif %}
+            </section>
+        </main>
+    </div>
+</div>
+{% endblock %}

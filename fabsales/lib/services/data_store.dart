@@ -3,9 +3,13 @@ import 'dart:async';
 import 'package:flutter/widgets.dart';
 
 import '../models/lead.dart';
+import '../models/order.dart';
+import '../models/product.dart';
+import '../models/sales_summary.dart';
 import '../models/task.dart';
 import 'auth_service.dart';
 import 'lead_service.dart';
+import 'order_service.dart';
 import 'task_service.dart';
 
 class DataStore extends ChangeNotifier with WidgetsBindingObserver {
@@ -18,6 +22,11 @@ class DataStore extends ChangeNotifier with WidgetsBindingObserver {
   List<Lead>? leads;
   String? tasksError;
   String? leadsError;
+  List<Product>? products;
+  String? productsError;
+  List<Order>? orders;
+  String? ordersError;
+  SalesSummary? summary;
 
   Timer? _timer;
   Future<void>? _inflight;
@@ -35,7 +44,7 @@ class DataStore extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> refresh() {
-    return _inflight ??= Future.wait([_loadTasks(), _loadLeads()])
+    return _inflight ??= Future.wait([_loadTasks(), _loadLeads(), _loadProducts(), _loadOrders(), _loadSummary()])
         .then((_) {})
         .whenComplete(() => _inflight = null);
   }
@@ -56,6 +65,33 @@ class DataStore extends ChangeNotifier with WidgetsBindingObserver {
       leadsError = null;
     } catch (e) {
       leadsError = e.toString();
+    }
+    _notify();
+  }
+
+  Future<void> _loadSummary() async {
+    try {
+      summary = await OrderService.fetchSummary(_auth);
+    } catch (_) {}
+    _notify();
+  }
+
+  Future<void> _loadOrders() async {
+    try {
+      orders = await OrderService.fetchOrders(_auth);
+      ordersError = null;
+    } catch (e) {
+      ordersError = e.toString();
+    }
+    _notify();
+  }
+
+  Future<void> _loadProducts() async {
+    try {
+      products = await OrderService.fetchProducts(_auth);
+      productsError = null;
+    } catch (e) {
+      productsError = e.toString();
     }
     _notify();
   }

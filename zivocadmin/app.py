@@ -100,28 +100,69 @@ def render_error(request: Request, message: str, status: int = 400):
     return render(request, "error.html", {"message": message}, status)
 
 
-def fetch_people(token):
-    if not token:
+def refresh_token(request: Request):
+    saved = request.session.get("refresh_token")
+    if not saved:
+        return False
+    response = frappe_request(
+        "POST",
+        Config.TOKEN_PATH,
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": saved,
+            "client_id": Config.OAUTH_CLIENT_ID,
+            "client_secret": Config.OAUTH_CLIENT_SECRET,
+        },
+    )
+    if response.status_code != 200:
+        return False
+    body = response.json()
+    if not body.get("access_token"):
+        return False
+    request.session["token"] = body["access_token"]
+    request.session["refresh_token"] = body.get("refresh_token") or saved
+    return True
+
+
+def erp_authed(request: Request, method, path, **kwargs):
+    def send():
+        headers = dict(kwargs.get("headers") or {})
+        headers["Authorization"] = "Bearer " + (request.session.get("token") or "")
+        return frappe_request(method, path, **{**kwargs, "headers": headers})
+
+    response = send()
+    if response.status_code == 401 and refresh_token(request):
+        response = send()
+    if response.status_code == 401:
+        request.session.clear()
+        raise NotAuthenticated()
+    return response
+
+
+def fetch_people(request: Request):
+    if not request.session.get("token"):
         return None
     people = {}
     for role in Config.TASK_ROLES:
-        response = frappe_request(
+        response = erp_authed(
+            request,
             "GET",
             "/api/method/custom_layer.drawing_auth.get_users_by_role",
-            headers={"Authorization": "Bearer " + token},
             params={"role": role},
         )
         response.raise_for_status()
         people[role] = response.json().get("message", [])
     return people
-
-
 def erp_identity(sid):
     headers = {"Cookie": "sid=" + sid}
-    who = frappe_request("GET", "/api/method/frappe.auth.get_logged_user", headers=dict(headers))
-    if who.status_code != 200:
+    me = frappe_request(
+        "GET", "/api/method/custom_layer.drawing_auth.me", headers=dict(headers)
+    )
+    if me.status_code != 200:
         return None, []
-    name = who.json().get("message")
+    name = (me.json().get("message") or {}).get("user")
+    if not name:
+        return None, []
     roles = frappe_request(
         "GET", "/api/method/custom_layer.drawing_auth.get_roles", headers=dict(headers)
     )
@@ -219,6 +260,7 @@ def auth_callback(request: Request):
         "roles": profile.get("roles") or [],
     }
     request.session["token"] = access_token
+    request.session["refresh_token"] = token_response.json().get("refresh_token")
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -237,7 +279,7 @@ def erp(user: dict = Depends(require_user)):
 def tasks_page(request: Request, user: dict = Depends(require_user), sent: Optional[str] = None):
     people, error = None, None
     try:
-        people = fetch_people(request.session.get("token"))
+        people = fetch_people(request)
         if people is None:
             error = "Your session has no ERP access. Please sign out and sign in again."
     except (requests.RequestException, ValueError):
@@ -275,7 +317,7 @@ def render_assign(request, user, person, role, title, description, error, sent, 
 
 
 def find_person(request, email, role):
-    people = fetch_people(request.session.get("token")) or {}
+    people = fetch_people(request) or {}
     return next((p for p in people.get(role, []) if p["name"] == email), None)
 
 
@@ -356,6 +398,175 @@ def remove_task(
         url=request.app.url_path_for("assign_task") + "?" + query, status_code=303
     )
 
+
+@app.get("/commission", name="commission_page")
+def commission_page(
+    request: Request,
+    user: dict = Depends(require_user),
+    done: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    salesmen = []
+    try:
+        response = erp_authed(
+            request,
+            "GET",
+            "/api/method/custom_layer.commission.list_salesmen",
+        )
+        data = erp_message(response)
+        if response.status_code == 200 and data.get("ok"):
+            salesmen = data.get("salesmen", [])
+        else:
+            error = error or data.get("message") or "Could not load salesmen from Zivoc ERP."
+    except (requests.RequestException, ValueError):
+        error = error or "Could not load salesmen from Zivoc ERP."
+    return render(
+        request,
+        "commission.html",
+        {"user": user, "salesmen": salesmen, "error": error, "done": done},
+    )
+
+
+@app.post("/commission/set", name="commission_set")
+def commission_set(
+    request: Request,
+    user: dict = Depends(require_user),
+    percent: str = Form(""),
+    target: str = Form("", alias="user"),
+    apply_to_all: str = Form(""),
+):
+    query = {}
+    payload = {"percent": percent.strip(), "apply_to_all": 1 if apply_to_all else 0}
+    if target.strip():
+        payload["user"] = target.strip()
+    try:
+        response = erp_authed(
+            request,
+            "POST",
+            "/api/method/custom_layer.commission.set_commission",
+            data=payload,
+        )
+        data = erp_message(response)
+        if response.status_code == 200 and data.get("ok"):
+            count = data.get("updated", 0)
+            query["done"] = "Commission set to %s%% for %s salesm%s." % (
+                data.get("percent"),
+                count,
+                "an" if count == 1 else "en",
+            )
+        else:
+            query["error"] = data.get("message") or "Could not save the commission."
+    except (requests.RequestException, ValueError):
+        query["error"] = "Could not reach Zivoc ERP."
+    return RedirectResponse(
+        url=request.app.url_path_for("commission_page") + "?" + urlencode(query), status_code=303
+    )
+
+@app.post("/commission/target", name="target_set")
+def target_set(
+    request: Request,
+    user: dict = Depends(require_user),
+    amount: str = Form(""),
+    target: str = Form("", alias="user"),
+    apply_to_all: str = Form(""),
+):
+    query = {}
+    payload = {"amount": amount.strip(), "apply_to_all": 1 if apply_to_all else 0}
+    if target.strip():
+        payload["user"] = target.strip()
+    try:
+        response = erp_authed(
+            request,
+            "POST",
+            "/api/method/custom_layer.commission.set_target",
+            data=payload,
+        )
+        data = erp_message(response)
+        if response.status_code == 200 and data.get("ok"):
+            count = data.get("updated", 0)
+            query["done"] = "Monthly target set to %s for %s salesm%s." % (
+                formatted_amount(data.get("amount")),
+                count,
+                "an" if count == 1 else "en",
+            )
+        else:
+            query["error"] = data.get("message") or "Could not save the target."
+    except (requests.RequestException, ValueError):
+        query["error"] = "Could not reach Zivoc ERP."
+    return RedirectResponse(
+        url=request.app.url_path_for("commission_page") + "?" + urlencode(query), status_code=303
+    )
+
+
+def formatted_amount(value):
+    try:
+        return "{:,.2f}".format(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def erp_message(response):
+    try:
+        body = response.json()
+    except ValueError:
+        return {}
+    message = body.get("message")
+    return message if isinstance(message, dict) else body
+
+
+@app.get("/orders", name="orders_page")
+def orders_page(
+    request: Request,
+    user: dict = Depends(require_user),
+    done: Optional[str] = None,
+    error: Optional[str] = None,
+):
+    orders = []
+    try:
+        response = erp_authed(
+            request,
+            "GET",
+            "/api/method/custom_layer.orders.list_orders",
+        )
+        data = erp_message(response)
+        if response.status_code == 200 and data.get("ok"):
+            orders = data.get("orders", [])
+        else:
+            error = error or data.get("message") or "Could not load orders from Zivoc ERP."
+    except (requests.RequestException, ValueError):
+        error = error or "Could not load orders from Zivoc ERP."
+    return render(
+        request,
+        "orders.html",
+        {"user": user, "orders": orders, "error": error, "done": done},
+    )
+
+
+@app.post("/orders/status", name="order_status")
+def order_status(
+    request: Request,
+    user: dict = Depends(require_user),
+    order: str = Form(""),
+    status: str = Form(""),
+):
+    query = {}
+    try:
+        response = erp_authed(
+            request,
+            "POST",
+            "/api/method/custom_layer.orders.set_order_status",
+            data={"order": order.strip(), "status": status.strip()},
+        )
+        data = erp_message(response)
+        if response.status_code == 200 and data.get("ok"):
+            query["done"] = order.strip() + " " + status.strip().lower()
+        else:
+            query["error"] = data.get("message") or "Could not update the order."
+    except (requests.RequestException, ValueError):
+        query["error"] = "Could not reach Zivoc ERP."
+    return RedirectResponse(
+        url=request.app.url_path_for("orders_page") + "?" + urlencode(query), status_code=303
+    )
 
 @app.get("/api/tasks")
 def api_tasks(x_erp_sid: str = Header("")):
