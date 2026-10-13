@@ -168,7 +168,7 @@ class AuthService extends ChangeNotifier {
     try {
       response = await http
           .get(
-            Env.uri('/api/method/frappe.core.doctype.user.user.get_roles'),
+            Env.uri('/api/method/custom_layer.drawing_auth.get_roles'),
             headers: {
               'Accept': 'application/json',
               if (Env.siteName.isNotEmpty) 'X-Frappe-Site-Name': Env.siteName,

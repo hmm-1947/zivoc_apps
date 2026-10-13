@@ -1,9 +1,12 @@
+import 'dart:ui' show PointerDeviceKind;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
-import 'screens/home_screen.dart';
+import 'screens/main_shell.dart';
 import 'screens/login_screen.dart';
 import 'services/auth_service.dart';
+import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,11 +24,15 @@ class SchematicStudioApp extends StatelessWidget {
       child: MaterialApp(
         title: 'Schematic Studio',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          useMaterial3: true,
-          colorSchemeSeed: const Color(0xFF4C6FFF),
-          fontFamily: 'Roboto',
+        scrollBehavior: const MaterialScrollBehavior().copyWith(
+          dragDevices: {
+            PointerDeviceKind.touch,
+            PointerDeviceKind.mouse,
+            PointerDeviceKind.stylus,
+            PointerDeviceKind.trackpad,
+          },
         ),
+        theme: AppTheme.light(),
         home: const AuthGate(),
       ),
     );
@@ -45,7 +52,7 @@ class AuthGate extends StatelessWidget {
       case AuthStatus.signedOut:
         return const LoginScreen();
       case AuthStatus.signedIn:
-        return const HomeScreen();
+        return const MainShell();
     }
   }
 }

@@ -1,34 +1,71 @@
 import base64
 import hashlib
 import json
-import os
 import secrets
-from functools import wraps
+from pathlib import Path
+from typing import Optional
 from urllib.parse import urlencode
 
-import psycopg2
 import requests
-from flask import Flask, jsonify, redirect, render_template, request, session, url_for
+import uvicorn
+from fastapi import Depends, FastAPI, Form, Header, Query, Request
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
+from sqlalchemy.exc import SQLAlchemyError
+from starlette.middleware.sessions import SessionMiddleware
 
 from config import Config
-from db import create_task, init_db, tasks_for
+from db import create_task, delete_task, tasks_for
 
-app = Flask(__name__)
-app.config.from_object(Config)
+BASE_DIR = Path(__file__).resolve().parent
+
+app = FastAPI(title="Zivoc Admin")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=Config.SECRET_KEY,
+    session_cookie=Config.SESSION_COOKIE_NAME,
+    max_age=Config.SESSION_SECONDS,
+    same_site="lax",
+    https_only=False,
+)
+app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+
+templates = Jinja2Templates(directory=BASE_DIR / "templates")
 
 
-def current_user():
-    return session.get("user")
+@pass_context
+def url_for(context, name, **params):
+    app_ = context["request"].app
+    if name == "static":
+        return str(app_.url_path_for("static", path=params["filename"]))
+    path = str(app_.url_path_for(name))
+    query = {k: v for k, v in params.items() if v is not None}
+    return path + ("?" + urlencode(query) if query else "")
 
 
-def login_required(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if not current_user():
-            return redirect(url_for("index"))
-        return view(*args, **kwargs)
+templates.env.globals["url_for"] = url_for
 
-    return wrapped
+
+class NotAuthenticated(Exception):
+    pass
+
+
+@app.exception_handler(NotAuthenticated)
+def not_authenticated_handler(request: Request, exc: NotAuthenticated):
+    return RedirectResponse(url="/", status_code=303)
+
+
+def current_user(request: Request):
+    return request.session.get("user")
+
+
+def require_user(request: Request):
+    user = current_user(request)
+    if not user:
+        raise NotAuthenticated()
+    return user
 
 
 def frappe_request(method, path, **kwargs):
@@ -51,140 +88,31 @@ def pkce_pair():
     return verifier, challenge
 
 
-def redirect_uri():
-    return Config.APP_URL + url_for("auth_callback")
+def redirect_uri(request: Request):
+    return Config.APP_URL + request.app.url_path_for("auth_callback")
 
 
-def render_error(message, status=400):
-    return render_template("error.html", message=message), status
+def render(request: Request, name: str, context: dict, status: int = 200):
+    return templates.TemplateResponse(request, name, context, status_code=status)
 
 
-@app.get("/")
-def index():
-    return render_template("index.html", user=current_user())
+def render_error(request: Request, message: str, status: int = 400):
+    return render(request, "error.html", {"message": message}, status)
 
 
-@app.get("/login")
-def login():
-    if current_user():
-        return redirect(url_for("index"))
-    if not Config.OAUTH_CLIENT_ID:
-        return render_error("Zivoc sign-in is not configured on this server.", 500)
-
-    verifier, challenge = pkce_pair()
-    state = secrets.token_urlsafe(32)
-    nonce = secrets.token_urlsafe(16)
-    session["oauth"] = {"state": state, "verifier": verifier, "nonce": nonce}
-
-    params = {
-        "client_id": Config.OAUTH_CLIENT_ID,
-        "response_type": "code",
-        "scope": Config.OAUTH_SCOPE,
-        "redirect_uri": redirect_uri(),
-        "state": state,
-        "nonce": nonce,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-    }
-    return redirect(Config.FRAPPE_URL + Config.AUTHORIZE_PATH + "?" + urlencode(params))
-
-
-@app.get("/auth/callback")
-def auth_callback():
-    saved = session.pop("oauth", None)
-    if not saved:
-        return render_error("Your sign-in session expired. Please try again.")
-
-    if request.args.get("error"):
-        return render_error("Zivoc sign-in was cancelled or denied.", 403)
-
-    code = request.args.get("code")
-    state = request.args.get("state")
-    if not code or not state or not secrets.compare_digest(state, saved["state"]):
-        return render_error("Invalid sign-in response. Please try again.")
-
-    try:
-        token_response = frappe_request(
-            "POST",
-            Config.TOKEN_PATH,
-            data={
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": redirect_uri(),
-                "client_id": Config.OAUTH_CLIENT_ID,
-                "client_secret": Config.OAUTH_CLIENT_SECRET,
-                "code_verifier": saved["verifier"],
-            },
-        )
-        if token_response.status_code != 200:
-            return render_error("Zivoc rejected the sign-in request.", 401)
-        access_token = token_response.json().get("access_token")
-        if not access_token:
-            return render_error("Zivoc did not return an access token.", 401)
-
-        profile_response = frappe_request(
-            "GET",
-            Config.USERINFO_PATH,
-            headers={"Authorization": "Bearer " + access_token},
-        )
-        if profile_response.status_code != 200:
-            return render_error("Could not read your Zivoc profile.", 401)
-        profile = profile_response.json()
-    except (requests.RequestException, ValueError):
-        return render_error("Could not reach the Zivoc server. Please try again.", 502)
-
-    email = (profile.get("email") or "").strip().lower()
-    if not email:
-        return render_error("Your Zivoc account has no email address.", 403)
-
-    session.clear()
-    session.permanent = True
-    session["user"] = {
-        "email": email,
-        "name": profile.get("name") or email,
-        "picture": profile.get("picture"),
-        "roles": profile.get("roles") or [],
-    }
-    session["token"] = access_token
-    return redirect(url_for("index"))
-
-
-@app.post("/logout")
-def logout():
-    session.clear()
-    return redirect(url_for("index"))
-
-
-@app.get("/erp")
-@login_required
-def erp():
-    return redirect(Config.FRAPPE_URL + Config.ERP_PATH)
-
-def fetch_people():
-    token = session.get("token")
+def fetch_people(token):
     if not token:
         return None
     people = {}
     for role in Config.TASK_ROLES:
         response = frappe_request(
             "GET",
-            "/api/resource/User",
+            "/api/method/custom_layer.drawing_auth.get_users_by_role",
             headers={"Authorization": "Bearer " + token},
-            params={
-                "filters": json.dumps(
-                    [
-                        ["Has Role", "role", "=", role],
-                        ["enabled", "=", 1],
-                        ["name", "not in", ["Administrator", "Guest"]],
-                    ]
-                ),
-                "fields": json.dumps(["name", "full_name", "user_image"]),
-                "order_by": "full_name asc",
-                "limit_page_length": 0,
-            },
+            params={"role": role},
         )
         response.raise_for_status()
-        people[role] = response.json().get("data", [])
+        people[role] = response.json().get("message", [])
     return people
 
 
@@ -195,105 +123,274 @@ def erp_identity(sid):
         return None, []
     name = who.json().get("message")
     roles = frappe_request(
-        "GET", "/api/method/frappe.core.doctype.user.user.get_roles", headers=dict(headers)
+        "GET", "/api/method/custom_layer.drawing_auth.get_roles", headers=dict(headers)
     )
     if roles.status_code != 200:
         return None, []
     return name, roles.json().get("message") or []
 
 
+@app.get("/")
+def index(request: Request):
+    return render(request, "index.html", {"user": current_user(request)})
+
+
+@app.get("/login")
+def login(request: Request):
+    if current_user(request):
+        return RedirectResponse(url="/", status_code=303)
+    if not Config.OAUTH_CLIENT_ID:
+        return render_error(request, "Zivoc sign-in is not configured on this server.", 500)
+
+    verifier, challenge = pkce_pair()
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(16)
+    request.session["oauth"] = {"state": state, "verifier": verifier, "nonce": nonce}
+
+    params = {
+        "client_id": Config.OAUTH_CLIENT_ID,
+        "response_type": "code",
+        "scope": Config.OAUTH_SCOPE,
+        "redirect_uri": redirect_uri(request),
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    return RedirectResponse(
+        url=Config.FRAPPE_URL + Config.AUTHORIZE_PATH + "?" + urlencode(params),
+        status_code=302,
+    )
+
+
+@app.get("/auth/callback")
+def auth_callback(request: Request):
+    saved = request.session.pop("oauth", None)
+    if not saved:
+        return render_error(request, "Your sign-in session expired. Please try again.")
+
+    if request.query_params.get("error"):
+        return render_error(request, "Zivoc sign-in was cancelled or denied.", 403)
+
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+    if not code or not state or not secrets.compare_digest(state, saved["state"]):
+        return render_error(request, "Invalid sign-in response. Please try again.")
+
+    try:
+        token_response = frappe_request(
+            "POST",
+            Config.TOKEN_PATH,
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri(request),
+                "client_id": Config.OAUTH_CLIENT_ID,
+                "client_secret": Config.OAUTH_CLIENT_SECRET,
+                "code_verifier": saved["verifier"],
+            },
+        )
+        if token_response.status_code != 200:
+            return render_error(request, "Zivoc rejected the sign-in request.", 401)
+        access_token = token_response.json().get("access_token")
+        if not access_token:
+            return render_error(request, "Zivoc did not return an access token.", 401)
+
+        profile_response = frappe_request(
+            "GET",
+            Config.USERINFO_PATH,
+            headers={"Authorization": "Bearer " + access_token},
+        )
+        if profile_response.status_code != 200:
+            return render_error(request, "Could not read your Zivoc profile.", 401)
+        profile = profile_response.json()
+    except (requests.RequestException, ValueError):
+        return render_error(request, "Could not reach the Zivoc server. Please try again.", 502)
+
+    email = (profile.get("email") or "").strip().lower()
+    if not email:
+        return render_error(request, "Your Zivoc account has no email address.", 403)
+
+    request.session.clear()
+    request.session["user"] = {
+        "email": email,
+        "name": profile.get("name") or email,
+        "picture": profile.get("picture"),
+        "roles": profile.get("roles") or [],
+    }
+    request.session["token"] = access_token
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/erp")
+def erp(user: dict = Depends(require_user)):
+    return RedirectResponse(url=Config.FRAPPE_URL + Config.ERP_PATH, status_code=302)
+
+
 @app.get("/tasks")
-@login_required
-def tasks_page():
+def tasks_page(request: Request, user: dict = Depends(require_user), sent: Optional[str] = None):
     people, error = None, None
     try:
-        people = fetch_people()
+        people = fetch_people(request.session.get("token"))
         if people is None:
             error = "Your session has no ERP access. Please sign out and sign in again."
     except (requests.RequestException, ValueError):
         error = "Could not load people from Zivoc ERP."
-    return render_template(
+    return render(
+        request,
         "tasks.html",
-        user=current_user(),
-        people=people or {},
-        error=error,
-        sent=request.args.get("sent"),
+        {"user": user, "people": people or {}, "error": error, "sent": sent},
     )
 
 
-@app.route("/tasks/assign", methods=["GET", "POST"])
-@login_required
-def assign_task():
-    email = (request.values.get("user") or "").strip()
-    role = (request.values.get("role") or "").strip()
-    try:
-        people = fetch_people() or {}
-    except (requests.RequestException, ValueError):
-        return render_error("Could not load people from Zivoc ERP.", 502)
-
-    person = next((p for p in people.get(role, []) if p["name"] == email), None)
-    if not person:
-        return redirect(url_for("tasks_page"))
+def render_assign(request, user, person, role, title, description, error, sent, deleted):
     person_name = person.get("full_name") or person["name"]
-
-    error = None
-    title = ""
-    description = ""
-    if request.method == "POST":
-        title = (request.form.get("title") or "").strip()
-        description = (request.form.get("description") or "").strip()
-        if not title:
-            error = "Task name is required."
-        else:
-            try:
-                create_task(title, description, person["name"], person_name, role, current_user()["email"])
-            except psycopg2.Error:
-                error = "Could not save the task. Please try again."
-            else:
-                return redirect(url_for("tasks_page", sent=person_name))
-
-    return render_template(
+    try:
+        existing = tasks_for(person["name"])
+    except SQLAlchemyError:
+        existing = []
+        error = error or "Could not load existing tasks."
+    return render(
+        request,
         "assign_task.html",
-        user=current_user(),
-        person=person,
-        person_name=person_name,
-        role=role,
-        title=title,
-        description=description,
-        error=error,
+        {
+            "user": user,
+            "person": person,
+            "person_name": person_name,
+            "role": role,
+            "title": title,
+            "description": description,
+            "error": error,
+            "tasks": existing,
+            "sent": sent,
+            "deleted": deleted,
+        },
+    )
+
+
+def find_person(request, email, role):
+    people = fetch_people(request.session.get("token")) or {}
+    return next((p for p in people.get(role, []) if p["name"] == email), None)
+
+
+@app.get("/tasks/assign", name="assign_task")
+def assign_task_page(
+    request: Request,
+    user: dict = Depends(require_user),
+    email: str = Query("", alias="user"),
+    role: str = "",
+    sent: Optional[str] = None,
+    deleted: Optional[str] = None,
+):
+    try:
+        person = find_person(request, email.strip(), role.strip())
+    except (requests.RequestException, ValueError):
+        return render_error(request, "Could not load people from Zivoc ERP.", 502)
+    if not person:
+        return RedirectResponse(url=request.app.url_path_for("tasks_page"), status_code=303)
+    return render_assign(request, user, person, role.strip(), "", "", None, sent, deleted)
+
+
+@app.post("/tasks/assign", name="assign_task")
+def assign_task_submit(
+    request: Request,
+    user: dict = Depends(require_user),
+    email: str = Form("", alias="user"),
+    role: str = Form(""),
+    title: str = Form(""),
+    description: str = Form(""),
+):
+    email, role = email.strip(), role.strip()
+    try:
+        person = find_person(request, email, role)
+    except (requests.RequestException, ValueError):
+        return render_error(request, "Could not load people from Zivoc ERP.", 502)
+    if not person:
+        return RedirectResponse(url=request.app.url_path_for("tasks_page"), status_code=303)
+
+    title, description = title.strip(), description.strip()
+    error = None
+    if not title:
+        error = "Task name is required."
+    else:
+        person_name = person.get("full_name") or person["name"]
+        try:
+            create_task(title, description, person["name"], person_name, role, user["email"])
+        except SQLAlchemyError:
+            error = "Could not save the task. Please try again."
+        else:
+            query = urlencode({"user": person["name"], "role": role, "sent": 1})
+            return RedirectResponse(
+                url=request.app.url_path_for("assign_task") + "?" + query, status_code=303
+            )
+
+    return render_assign(request, user, person, role, title, description, error, None, None)
+
+
+@app.post("/tasks/delete", name="remove_task")
+def remove_task(
+    request: Request,
+    user: dict = Depends(require_user),
+    email: str = Form("", alias="user"),
+    role: str = Form(""),
+    task_id: str = Form(""),
+):
+    email, role = email.strip(), role.strip()
+    try:
+        tid = int(task_id or 0)
+    except ValueError:
+        tid = 0
+    if email and tid:
+        try:
+            delete_task(tid, email)
+        except SQLAlchemyError:
+            return render_error(request, "Could not delete the task.", 500)
+    query = urlencode({"user": email, "role": role, "deleted": 1})
+    return RedirectResponse(
+        url=request.app.url_path_for("assign_task") + "?" + query, status_code=303
     )
 
 
 @app.get("/api/tasks")
-def api_tasks():
-    sid = (request.headers.get("X-ERP-SID") or "").strip()
+def api_tasks(x_erp_sid: str = Header("")):
+    sid = x_erp_sid.strip()
     if not sid:
-        return jsonify({"message": "Missing session."}), 401
+        return JSONResponse({"message": "Missing session."}, status_code=401)
     try:
         name, roles = erp_identity(sid)
     except (requests.RequestException, ValueError):
-        return jsonify({"message": "Could not reach Zivoc ERP."}), 502
+        return JSONResponse({"message": "Could not reach Zivoc ERP."}, status_code=502)
     if not name:
-        return jsonify({"message": "Invalid session."}), 401
+        return JSONResponse({"message": "Invalid session."}, status_code=401)
     if not set(roles) & set(Config.TASK_ROLES):
-        return jsonify({"message": "Only fabricators and salesmen can view tasks."}), 403
-    rows = tasks_for(name)
-    return jsonify(
+        return JSONResponse(
+            {"message": "Only fabricators and salesmen can view tasks."}, status_code=403
+        )
+    try:
+        rows = tasks_for(name)
+    except SQLAlchemyError:
+        return JSONResponse({"message": "Could not load tasks."}, status_code=500)
+    return JSONResponse(
         {
             "tasks": [
                 {
-                    "id": r["id"],
-                    "title": r["title"],
-                    "description": r["description"],
-                    "created_at": r["created_at"].isoformat(),
+                    "id": r.id,
+                    "title": r.title,
+                    "description": r.description,
+                    "created_at": r.created_at.isoformat(),
                 }
                 for r in rows
             ]
-        }
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
-init_db()
-
 if __name__ == "__main__":
-    app.run(host=os.environ.get("APP_HOST", "127.0.0.1"), port=5000, debug=True)
+    uvicorn.run("app:app", host=Config.APP_HOST, port=Config.APP_PORT, reload=True)

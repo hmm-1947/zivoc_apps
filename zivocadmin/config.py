@@ -13,10 +13,10 @@ def _url(name, default):
 class Config:
     SECRET_KEY = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
     SESSION_COOKIE_NAME = "zivoc_admin_session"
-    SESSION_COOKIE_HTTPONLY = True
-    SESSION_COOKIE_SAMESITE = "Lax"
-    PERMANENT_SESSION_LIFETIME = int(os.environ.get("SESSION_HOURS", "8")) * 3600
+    SESSION_SECONDS = int(os.environ.get("SESSION_HOURS", "8")) * 3600
 
+    APP_HOST = os.environ.get("APP_HOST", "127.0.0.1")
+    APP_PORT = int(os.environ.get("APP_PORT", "5000"))
     APP_URL = _url("APP_URL", "http://localhost:5000")
     FRAPPE_URL = _url("FRAPPE_URL", "http://erp.localhost:8000")
     FRAPPE_INTERNAL_URL = _url("FRAPPE_INTERNAL_URL", os.environ.get("FRAPPE_URL", "http://erp.localhost:8000"))

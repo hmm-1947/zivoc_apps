@@ -1,59 +1,44 @@
-import psycopg2
-import psycopg2.extras
+from sqlalchemy import create_engine, delete, func, select
+from sqlalchemy.orm import sessionmaker
 
 from config import Config
+from models import Task
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS tasks (
-    id SERIAL PRIMARY KEY,
-    title TEXT NOT NULL,
-    description TEXT NOT NULL DEFAULT '',
-    assignee TEXT NOT NULL,
-    assignee_name TEXT NOT NULL,
-    assignee_role TEXT NOT NULL,
-    created_by TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS tasks_assignee_idx ON tasks (lower(assignee));
-"""
-
-
-def connect():
-    return psycopg2.connect(Config.DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
-
-
-def init_db():
-    conn = connect()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(SCHEMA)
-    finally:
-        conn.close()
+engine = create_engine(Config.DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(engine, expire_on_commit=False)
 
 
 def create_task(title, description, assignee, assignee_name, assignee_role, created_by):
-    conn = connect()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(
-                "INSERT INTO tasks (title, description, assignee, assignee_name, assignee_role, created_by) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
-                (title, description, assignee, assignee_name, assignee_role, created_by),
-            )
-            return cur.fetchone()["id"]
-    finally:
-        conn.close()
+    with SessionLocal.begin() as session:
+        task = Task(
+            title=title,
+            description=description,
+            assignee=assignee,
+            assignee_name=assignee_name,
+            assignee_role=assignee_role,
+            created_by=created_by,
+        )
+        session.add(task)
+        session.flush()
+        return task.id
 
 
 def tasks_for(assignee):
-    conn = connect()
-    try:
-        with conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, title, description, created_at FROM tasks "
-                "WHERE lower(assignee) = lower(%s) ORDER BY created_at DESC",
-                (assignee,),
+    with SessionLocal() as session:
+        stmt = (
+            select(Task)
+            .where(func.lower(Task.assignee) == func.lower(assignee))
+            .order_by(Task.created_at.desc())
+        )
+        return list(session.scalars(stmt))
+
+
+def delete_task(task_id, assignee):
+    with SessionLocal.begin() as session:
+        result = session.execute(
+            delete(Task).where(
+                Task.id == task_id,
+                func.lower(Task.assignee) == func.lower(assignee),
             )
-            return cur.fetchall()
-    finally:
-        conn.close()
+        )
+        return result.rowcount

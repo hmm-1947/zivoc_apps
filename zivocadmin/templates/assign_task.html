@@ -11,9 +11,40 @@
             <h1>Assign Task</h1>
             <p class="lead">To <strong>{{ person_name }}</strong> &middot; {{ role }}</p>
 
+            {% if sent %}
+            <div class="notice ok">Task assigned.</div>
+            {% endif %}
+            {% if deleted %}
+            <div class="notice ok">Task deleted.</div>
+            {% endif %}
             {% if error %}
             <div class="notice err">{{ error }}</div>
             {% endif %}
+
+            <h2>Assigned tasks <span class="count">{{ tasks | length }}</span></h2>
+            {% if tasks %}
+            <ul class="task-list">
+                {% for t in tasks %}
+                <li class="task-item">
+                    <div>
+                        <strong>{{ t.title }}</strong>
+                        {% if t.description %}<p>{{ t.description }}</p>{% endif %}
+                        <small>{{ t.created_at.strftime('%d %b %Y %H:%M') }}</small>
+                    </div>
+                    <form method="post" action="{{ url_for('remove_task') }}" onsubmit="return confirm('Delete this task?');">
+                        <input type="hidden" name="user" value="{{ person.name }}">
+                        <input type="hidden" name="role" value="{{ role }}">
+                        <input type="hidden" name="task_id" value="{{ t.id }}">
+                        <button type="submit">Delete</button>
+                    </form>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="lead">No tasks assigned yet.</p>
+            {% endif %}
+
+            <h2>Add a task</h2>
 
             <form class="task-form" method="post" action="{{ url_for('assign_task') }}">
                 <input type="hidden" name="user" value="{{ person.name }}">
